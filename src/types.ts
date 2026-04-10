@@ -1,8 +1,10 @@
 
-export type Operation = 'sum' | 'sub' | 'mul';
+export type Operation = 'sum' | 'sub' | 'mul' | 'mixed';
+export type GameMode = 'normal' | 'time_attack';
 
 export interface GameState {
   operation: Operation;
+  mode: GameMode;
   level: number;
   score: number;
   streak: number;
@@ -10,6 +12,7 @@ export interface GameState {
   isGameOver: boolean;
   currentProblem: Problem | null;
   playerName: string;
+  timeLeft?: number;
 }
 
 export interface Problem {
@@ -17,6 +20,15 @@ export interface Problem {
   b: number;
   answer: number;
   options: number[];
+  actualOp: 'sum' | 'sub' | 'mul';
+}
+
+export interface HighScore {
+  name: string;
+  score: number;
+  mode: GameMode;
+  operation: Operation;
+  date: string;
 }
 
 export interface Animal {

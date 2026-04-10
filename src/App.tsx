@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback, ReactNode } from 'react';
+import { useState, useCallback, ReactNode, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { 
@@ -14,20 +14,33 @@ import {
   Plus, 
   Minus, 
   X, 
-  Heart
+  Heart,
+  Clock,
+  Shuffle
 } from 'lucide-react';
-import { Operation, GameState, Problem, ANIMALS, Animal } from './types';
+import { Operation, GameState, Problem, ANIMALS, Animal, GameMode, HighScore } from './types';
 
 const COLORS = [
   'bg-red-400', 'bg-blue-400', 'bg-green-400', 'bg-yellow-400', 
   'bg-purple-400', 'bg-pink-400', 'bg-orange-400', 'bg-teal-400'
 ];
 
+const BG_COLORS = [
+  'bg-sky-400', 'bg-indigo-400', 'bg-violet-400', 'bg-fuchsia-400', 
+  'bg-rose-400', 'bg-orange-400', 'bg-emerald-400'
+];
+
 export default function App() {
   const [view, setView] = useState<'story' | 'menu' | 'game' | 'result'>('story');
   const [storyStep, setStoryStep] = useState(0);
+  const [selectedMode, setSelectedMode] = useState<GameMode>('normal');
+  const [highScores, setHighScores] = useState<HighScore[]>(() => {
+    const saved = localStorage.getItem('mathGameScores');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [gameState, setGameState] = useState<GameState>({
     operation: 'sum',
+    mode: 'normal',
     level: 1,
     score: 0,
     streak: 0,
@@ -49,11 +62,15 @@ export default function App() {
     let a, b, answer;
     const range = 5 + level * 5;
 
-    if (op === 'sum') {
+    let actualOp: 'sum' | 'sub' | 'mul' = op === 'mixed' 
+      ? (['sum', 'sub', 'mul'][Math.floor(Math.random() * 3)] as 'sum' | 'sub' | 'mul')
+      : op as 'sum' | 'sub' | 'mul';
+
+    if (actualOp === 'sum') {
       a = Math.floor(Math.random() * range) + 1;
       b = Math.floor(Math.random() * range) + 1;
       answer = a + b;
-    } else if (op === 'sub') {
+    } else if (actualOp === 'sub') {
       a = Math.floor(Math.random() * range) + level;
       b = Math.floor(Math.random() * a);
       answer = a - b;
@@ -79,6 +96,7 @@ export default function App() {
       b,
       answer,
       options: options.sort(() => Math.random() - 0.5),
+      actualOp
     };
   }, []);
 
@@ -92,19 +110,59 @@ export default function App() {
     setGameState(prev => ({
       ...prev,
       operation: op,
+      mode: selectedMode,
       level: 1,
       score: 0,
       streak: 0,
       bestStreak: 0,
       isGameOver: false,
       currentProblem: firstProblem,
+      timeLeft: selectedMode === 'time_attack' ? 60 : undefined,
     }));
     setLives(3);
     setView('game');
   };
 
+  const endGame = useCallback((finalState: GameState) => {
+    const newScore: HighScore = {
+      name: finalState.playerName || 'Héroe Anónimo',
+      score: finalState.score,
+      mode: finalState.mode,
+      operation: finalState.operation,
+      date: new Date().toISOString()
+    };
+    setHighScores(prev => {
+      const updated = [...prev, newScore].sort((a, b) => b.score - a.score).slice(0, 5);
+      localStorage.setItem('mathGameScores', JSON.stringify(updated));
+      return updated;
+    });
+    setView('result');
+    setFeedback(null);
+  }, []);
+
+  useEffect(() => {
+    if (gameState.isGameOver) {
+      endGame(gameState);
+    }
+  }, [gameState.isGameOver, gameState, endGame]);
+
+  useEffect(() => {
+    if (view === 'game' && gameState.mode === 'time_attack' && !feedback && gameState.timeLeft !== undefined && gameState.timeLeft > 0) {
+      const timer = setInterval(() => {
+        setGameState(prev => ({ ...prev, timeLeft: (prev.timeLeft || 0) - 1 }));
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [view, gameState.mode, feedback, gameState.timeLeft]);
+
+  useEffect(() => {
+    if (view === 'game' && gameState.mode === 'time_attack' && gameState.timeLeft === 0 && !gameState.isGameOver) {
+       setGameState(prev => ({ ...prev, isGameOver: true }));
+    }
+  }, [gameState.timeLeft, view, gameState.isGameOver]);
+
   const handleAnswer = (selected: number) => {
-    if (!gameState.currentProblem || feedback) return;
+    if (!gameState.currentProblem || feedback || gameState.isGameOver) return;
 
     const isCorrect = selected === gameState.currentProblem.answer;
     const randomAnimal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
@@ -127,6 +185,10 @@ export default function App() {
         });
       }
 
+      if (gameState.mode === 'time_attack') {
+        setGameState(prev => ({ ...prev, timeLeft: (prev.timeLeft || 0) + 3 }));
+      }
+
       setTimeout(() => {
         setGameState(prev => ({
           ...prev,
@@ -145,14 +207,25 @@ export default function App() {
         selectedAnswer: selected, 
         correctAnswer: gameState.currentProblem.answer 
       });
-      setLives(prev => prev - 1);
       
-      if (lives <= 1) {
-        setTimeout(() => {
-          setView('result');
-          setFeedback(null);
-        }, 3000); // Increased time to see the hint
+      if (gameState.mode === 'normal') {
+        setLives(prev => prev - 1);
+        if (lives <= 1) {
+          setTimeout(() => {
+            setGameState(prev => ({ ...prev, isGameOver: true }));
+          }, 3000);
+        } else {
+          setTimeout(() => {
+            setGameState(prev => ({
+              ...prev,
+              streak: 0,
+              currentProblem: generateProblem(prev.operation, prev.level)
+            }));
+            setFeedback(null);
+          }, 3000);
+        }
       } else {
+        setGameState(prev => ({ ...prev, timeLeft: Math.max(0, (prev.timeLeft || 0) - 5) }));
         setTimeout(() => {
           setGameState(prev => ({
             ...prev,
@@ -160,7 +233,7 @@ export default function App() {
             currentProblem: generateProblem(prev.operation, prev.level)
           }));
           setFeedback(null);
-        }, 3000); // Increased time to see the hint
+        }, 2000);
       }
     }
   };
@@ -173,8 +246,10 @@ export default function App() {
     }
   };
 
+  const currentBg = view === 'game' ? BG_COLORS[(gameState.level - 1) % BG_COLORS.length] : 'bg-sky-400';
+
   return (
-    <div className="min-h-screen bg-sky-400 font-sans text-white overflow-hidden flex flex-col items-center justify-center p-4 md:p-8">
+    <div className={`min-h-screen ${currentBg} font-sans text-white overflow-hidden flex flex-col items-center justify-center p-4 md:p-8 transition-colors duration-1000`}>
       {/* Background Decorations */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute top-10 left-10 w-32 h-32 bg-white/20 rounded-full blur-2xl" />
@@ -363,7 +438,7 @@ export default function App() {
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.8 }}
-            className="z-10 text-center max-w-md w-full px-4"
+            className="z-10 text-center max-w-md w-full px-4 flex flex-col items-center"
           >
             <motion.h1 
               className="text-5xl md:text-6xl font-black mb-8 drop-shadow-lg text-white"
@@ -372,8 +447,23 @@ export default function App() {
             >
               MUNDO<br/>MATEMÁTICO
             </motion.h1>
+
+            <div className="flex justify-center gap-4 mb-8 w-full">
+              <button 
+                onClick={() => setSelectedMode('normal')} 
+                className={`flex-1 py-3 rounded-2xl font-black text-sm md:text-lg transition-all ${selectedMode === 'normal' ? 'bg-white text-sky-500 shadow-lg scale-105' : 'bg-white/20 text-white hover:bg-white/30'}`}
+              >
+                ❤️ NORMAL
+              </button>
+              <button 
+                onClick={() => setSelectedMode('time_attack')} 
+                className={`flex-1 py-3 rounded-2xl font-black text-sm md:text-lg transition-all ${selectedMode === 'time_attack' ? 'bg-white text-sky-500 shadow-lg scale-105' : 'bg-white/20 text-white hover:bg-white/30'}`}
+              >
+                ⏱️ CONTRA RELOJ
+              </button>
+            </div>
             
-            <div className="grid gap-4">
+            <div className="grid gap-4 w-full">
               <MenuButton 
                 icon={<Plus className="w-8 h-8" />} 
                 label="SUMAR" 
@@ -392,9 +482,33 @@ export default function App() {
                 color="bg-purple-500" 
                 onClick={() => startGame('mul')} 
               />
+              <MenuButton 
+                icon={<Shuffle className="w-8 h-8" />} 
+                label="MIXTO" 
+                color="bg-pink-500" 
+                onClick={() => startGame('mixed')} 
+              />
             </div>
 
             <p className="mt-8 text-white/80 font-bold text-xl">¡Hola, {gameState.playerName}! 👋</p>
+
+            {highScores.length > 0 && (
+              <div className="mt-8 w-full bg-white/10 rounded-3xl p-6 backdrop-blur-sm">
+                <h3 className="text-xl font-black mb-4 flex items-center justify-center gap-2"><Trophy className="text-yellow-300 w-6 h-6"/> MEJORES PUNTAJES</h3>
+                <div className="space-y-2">
+                  {highScores.map((score, i) => (
+                    <div key={i} className="flex justify-between items-center bg-white/10 px-4 py-2 rounded-xl">
+                      <span className="font-bold truncate max-w-[120px] text-left">{i + 1}. {score.name}</span>
+                      <div className="flex gap-2 text-sm font-bold opacity-90 items-center">
+                        <span className="text-lg">{score.mode === 'time_attack' ? '⏱️' : '❤️'}</span>
+                        <span className="text-lg">{score.operation === 'sum' ? '+' : score.operation === 'sub' ? '-' : score.operation === 'mul' ? '×' : '🔀'}</span>
+                        <span className="text-yellow-300 w-16 text-right">{score.score} pts</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
 
@@ -413,13 +527,20 @@ export default function App() {
                 <span className="text-xl md:text-2xl font-bold">{gameState.score}</span>
               </div>
               
-              <div className="flex gap-1">
-                {[...Array(3)].map((_, i) => (
-                  <Heart 
-                    key={i} 
-                    className={`w-6 h-6 md:w-8 md:h-8 ${i < lives ? 'text-red-500 fill-red-500' : 'text-white/30'}`} 
-                  />
-                ))}
+              <div className="flex gap-1 items-center">
+                {gameState.mode === 'normal' ? (
+                  [...Array(3)].map((_, i) => (
+                    <Heart 
+                      key={i} 
+                      className={`w-6 h-6 md:w-8 md:h-8 ${i < lives ? 'text-red-500 fill-red-500' : 'text-white/30'}`} 
+                    />
+                  ))
+                ) : (
+                  <div className={`flex items-center gap-2 px-4 py-2 rounded-full font-black text-xl md:text-2xl ${gameState.timeLeft! <= 10 ? 'bg-red-500 animate-pulse' : 'bg-white/20'}`}>
+                    <Clock className="w-5 h-5 md:w-6 md:h-6" />
+                    {gameState.timeLeft}s
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-2 bg-white/20 backdrop-blur-md px-3 md:px-4 py-2 rounded-full">
@@ -436,7 +557,7 @@ export default function App() {
               <div className="text-6xl md:text-8xl font-black flex items-center justify-center gap-4 md:gap-6 flex-wrap">
                 <span>{gameState.currentProblem.a}</span>
                 <span className="text-sky-300">
-                  {gameState.operation === 'sum' ? '+' : gameState.operation === 'sub' ? '-' : '×'}
+                  {gameState.currentProblem.actualOp === 'sum' ? '+' : gameState.currentProblem.actualOp === 'sub' ? '-' : '×'}
                 </span>
                 <span>{gameState.currentProblem.b}</span>
                 <span className="text-sky-300">=</span>
@@ -626,7 +747,9 @@ export default function App() {
           >
             <Trophy className="w-20 h-20 md:w-24 md:h-24 text-yellow-400 mx-auto mb-6" />
             <h2 className="text-4xl md:text-5xl font-black mb-2 uppercase">¡Increíble, {gameState.playerName}!</h2>
-            <p className="text-xl font-bold text-sky-400 mb-8">¡Eres un genio matemático!</p>
+            <p className="text-xl font-bold text-sky-400 mb-8">
+              {gameState.mode === 'time_attack' ? '¡Se acabó el tiempo!' : '¡Eres un genio matemático!'}
+            </p>
             
             <div className="grid grid-cols-2 gap-4 mb-8">
               <div className="bg-sky-50 p-4 rounded-2xl">
